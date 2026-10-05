@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grab & Throw - Knowledge Arena</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600;700;800&display=swap');
+        
+        body {
+            font-family: 'Baloo 2', cursive;
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1e3a8a, #4c1d95);
+            color: white;
+            user-select: none;
+            touch-action: none;
+        }
+
+        /* Video element for processing (hidden) and displaying (styled) */
+        #input_video {
+            display: none;
+        }
+        
+        /* The main canvas for physics and drawing */
+        #game_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 5;
+        }
+
+        /* Container for the mini webcam view */
+        #webcam-container {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 240px;
+            height: 180px;
+            border-radius: 15px;
+            border: 4px solid #f472b6;
+            box-shadow: 0 0 20px rgba(244, 114, 182, 0.6);
+            overflow: hidden;
+            z-index: 10;
+            background: #000;
+        }
+
+        #webcam_canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror view */
+        }
+
+        .webcam-label {
+            position: absolute;
+            bottom: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #f472b6;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 11;
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .interactive {
+            pointer-events: auto;
+        }
+
+        /* Glowing text effects */
+        .text-glow-yellow { text-shadow: 0 0 10px #fde047, 0 0 20px #eab308; }
+        .text-glow-blue { text-shadow: 0 0 10px #60a5fa, 0 0 20px #3b82f6; }
+        .text-glow-pink { text-shadow: 0 0 10px #f472b6, 0 0 20px #db2777; }
+
+        /* Fraction styling */
+        .fraction {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            vertical-align: middle;
+            margin: 0 5px;
+        }
+        .fraction-line {
+            width: 100%;
+            height: 4px;
+            background-color: currentColor;
+            margin: 2px 0;
+            border-radius: 2px;
+        }
+
+        /* Game Elements Styling (HTML based UI instead of pure canvas for better look) */
+        .question-board {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 58, 138, 0.8);
+            border: 4px solid #60a5fa;
+            border-radius: 20px;
+            padding: 15px 40px;
+            box-shadow: 0 0 30px rgba(96, 165, 250, 0.5);
+            text-align: center;
+            backdrop-filter: blur(5px);
+            z-index: 15;
+        }
+
+        .hud-panel {
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #fbbf24;
+            border-radius: 15px;
+            padding: 10px 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            backdrop-filter: blur(4px);
+        }
+
+        /* Loader */
+        .loader {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #f472b6;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Pop animation */
+        @keyframes popIn {
+            0% { transform: scale(0.5); opacity: 0; }
+            80% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: popIn 0.5s ease-out forwards; }
+    </style>
+</head>
+<body>
+
+    <video id="input_video" autoplay playsinline></video>
+    
+    <!-- Mini Webcam Display -->
+    <div id="webcam-container" class="hidden">
+        <canvas id="webcam_canvas"></canvas>
+        <div class="webcam-label">WEBCAM</div>
+    </div>
+
+    <!-- Main Game Canvas (Handles Balls, Targets, Particles, Hand Cursor) -->
+    <canvas id="game_canvas"></canvas>
+
+    <!-- UI Overlay Layer -->
+    <div id="ui-layer" class="flex flex-col justify-between">
+        
+        <!-- Start Screen -->
+        <div id="start-screen" class="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-80 backdrop-blur-md z-50">
+            <h1 class="text-6xl md:text-8xl font-black text-white text-glow-yellow mb-2 tracking-wide text-center">GRAB & THROW</h1>
+            <h2 class="text-4xl md:text-5xl font-bold text-pink-400 text-glow-pink mb-8 transform -rotate-2">KNOWLEDGE ARENA</h2>
+            
+            <div class="bg-blue-900 bg-opacity-70 border-4 border-blue-400 rounded-3xl p-6 mb-8 max-w-2xl text-center shadow-2xl">
+                <p class="text-2xl font-bold mb-4">Topik: <span class="text-yellow-300">Tambah Pecahan</span> | Subjek: <span class="text-yellow-300">Matematik Tahun 3</span></p>
+                <div class="grid grid-cols-3 gap-4 text-left text-lg">
+                    <div class="bg-blue-800 p-4 rounded-xl border border-blue-300 flex flex-col items-center text-center">
+                        <span class="text-4xl mb-2">🤏</span>
+                        <p><b>1. PINCH</b><br>temukan ibu jari & telunjuk untuk pegang jawapan</p>
+                    </div>
+                    <div class="bg-blue-800 p-4 rounded-xl border border-blue-300 flex flex-col items-center text-center">
+                        <span class="text-4xl mb-2">👋</span>
+                        <p><b>2. GERAK</b><br>gerakkan tangan ke arah sasaran</p>
+                    </div>
+                    <div class="bg-blue-800 p-4 rounded-xl border border-blue-300 flex flex-col items-center text-center">
+                        <span class="text-4xl mb-2">🖐️</span>
+                        <p><b>3. LEPAS</b><br>buka jari untuk baling jawapan ke dalam bakul</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="loading-indicator" class="flex flex-col items-center hidden mb-6">
+                <div class="loader mb-3"></div>
+                <p class="text-pink-300 font-bold text-xl animate-pulse">Menghidupkan Kamera & AI...</p>
+            </div>
+            
+            <button id="start-btn" class="interactive bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-400 hover:to-purple-500 text-white font-bold py-4 px-12 rounded-full text-3xl border-4 border-white shadow-[0_0_20px_rgba(244,114,182,0.8)] transition-transform transform hover:scale-110">
+                MULA MAIN
+            </button>
+        </div>
+
+        <!-- In-Game UI (Scores, Timer, Question) -->
+        <div id="game-ui" class="w-full h-full relative hidden">
+            
+            <!-- Top HUD Bar -->
+            <div class="absolute top-5 right-5 flex gap-4 interactive z-20">
+                <!-- Timer -->
+                <div class="hud-panel flex items-center gap-2">
+                    <span class="text-2xl">⏱️</span>
+                    <span id="timer-display" class="text-3xl font-bold text-yellow-300">32s</span>
+                </div>
+                <!-- Score -->
+                <div class="hud-panel flex items-center gap-2">
+                    <span class="text-2xl text-yellow-400">⭐</span>
+                    <span class="text-xl font-bold text-gray-200">Skor:</span>
+                    <span id="score-display" class="text-3xl font-bold text-white">0</span>
+                </div>
+                <!-- Lives -->
+                <div class="hud-panel flex items-center gap-2" id="lives-container">
+                    <span class="text-3xl text-red-500 drop-shadow-[0_0_5px_red]" id="life-1">❤️</span>
+                    <span class="text-3xl text-red-500 drop-shadow-[0_0_5px_red]" id="life-2">❤️</span>
+                    <span class="text-3xl text-red-500 drop-shadow-[0_0_5px_red]" id="life-3">❤️</span>
+                </div>
+            </div>
+
+            <!-- Question Board -->
+            <div class="question-board">
+                <p class="text-blue-200 text-lg font-bold mb-1 tracking-widest uppercase">Soalan <span id="q-counter">1/10</span></p>
+                <div id="question-content" class="text-5xl md:text-7xl font-bold text-white flex items-center justify-center gap-4">
+                    <!-- Fraction content injected here -->
+                </div>
+            </div>
+            
+            <!-- Target Labels (Visual guides over the canvas targets) -->
+            <!-- These are positioned via JS to match canvas objects -->
+            <div id="target-labels" class="absolute w-full h-full pointer-events-none"></div>
+
+        </div>
+
+        <!-- End Screen -->
+        <div id="end-screen" class="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-90 backdrop-blur-md z-50 hidden interactive">
+            <h1 id="end-title" class="text-7xl md:text-9xl font-black text-glow-yellow mb-4">TAMAT!</h1>
+            <p id="end-message" class="text-2xl md:text-4xl text-white mb-8 text-center px-4 max-w-2xl"></p>
+            
+            <div class="bg-purple-900 bg-opacity-80 border-4 border-purple-400 rounded-3xl p-8 mb-10 shadow-[0_0_40px_rgba(168,85,247,0.6)] text-center transform scale-110">
+                <p class="text-3xl text-purple-200 mb-2 font-bold">Markah Keseluruhan</p>
+                <div class="flex items-center justify-center gap-4">
+                    <span class="text-6xl">⭐</span>
+                    <p id="final-score" class="text-8xl font-black text-yellow-400 text-glow-yellow">0</p>
+                </div>
+            </div>
+            
+            <button onclick="location.reload()" class="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white font-bold py-4 px-12 rounded-full text-3xl border-4 border-white shadow-[0_0_20px_rgba(52,211,153,0.8)] transition-transform transform hover:scale-110">
+                MAIN SEMULA
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 1. GAME DATA: Mathematics Year 3 (Addition of Fractions) ---
+        // Questions array. Each option is [numerator, denominator]
+        // Some answers might require simplification, but for Year 3, we keep denominators the same usually.
+        const questionsData = [
+            { q: [[1, 4], [2, 4]], options: [[3,4], [1,4], [4,4]], correctIdx: 0 },
+            { q: [[2, 6], [3, 6]], options: [[4,6], [5,6], [1,6]], correctIdx: 1 },
+            { q: [[3, 8], [4, 8]], options: [[5,8], [6,8], [7,8]], correctIdx: 2 },
+            { q: [[1, 5], [1, 5]], options: [[2,5], [3,5], [4,5]], correctIdx: 0 },
+            { q: [[4, 9], [4, 9]], options: [[6,9], [8,9], [9,9]], correctIdx: 1 },
+            { q: [[2, 7], [4, 7]], options: [[5,7], [7,7], [6,7]], correctIdx: 2 },
+            { q: [[3, 10], [6, 10]], options: [[9,10], [8,10], [7,10]], correctIdx: 0 },
+            { q: [[1, 3], [1, 3]], options: [[1,3], [2,3], [3,3]], correctIdx: 1 },
+            { q: [[2, 5], [2, 5]], options: [[3,5], [1,5], [4,5]], correctIdx: 2 },
+            { q: [[5, 8], [2, 8]], options: [[7,8], [6,8], [3,8]], correctIdx: 0 }
+        ];
+
+        // --- 2. GAME STATE ---
+        let gameState = 'START'; // START, PLAYING, END
+        let currentQuestionIndex = 0;
+        let score = 0;
+        let lives = 3;
+        let timer = 30;
+        let timerInterval;
+        let lastTime = 0;
+
+        // --- 3. PHYSICS & RENDER ENGINE (Canvas) ---
+        const canvas = document.getElementById('game_canvas');
+        const ctx = canvas.getContext('2d');
+        const webcamCanvas = document.getElementById('webcam_canvas');
+        const webcamCtx = webcamCanvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            // Mini webcam is fixed size via CSS, just set its internal resolution
+            webcamCanvas.width = 480; 
+            webcamCanvas.height = 360;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Game Entities
+        let balls = []; // Answer balls to grab
+        let buckets = []; // Target buckets for answers
+        let particles = []; // Particle effects
+
+        // Hand Tracking State
+        let handCursor = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            isPinching: false,
+            pinchStrength: 0,
+            active: false, // Is hand detected?
+            vx: 0,
+            vy: 0,
+            lastX: 0,
+            lastY: 0
+        };
+
+        let grabbedBall = null; // Reference to the ball currently being held
+
+        // --- 4. AUDIO SYSTEM (Synthesized) ---
+        let audioCtx;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        const sounds = {
+            grab: () => playSynth('sine', 600, 0.1, 0.1, 'slideDown'),
+            throw: () => playSynth('triangle', 300, 0.2, 0.2, 'slideUp'),
+            correct: () => {
+                playSynth('square', 440, 0.1, 0.1);
+                setTimeout(() => playSynth('square', 554, 0.1, 0.1), 100);
+                setTimeout(() => playSynth('square', 659, 0.2, 0.2), 200);
+            },
+            wrong: () => {
+                playSynth('sawtooth', 300, 0.3, 0.1, 'slideDown');
+                setTimeout(() => playSynth('sawtooth', 250, 0.4, 0.2, 'slideDown'), 150);
+            },
+            gameover: () => playSynth('sawtooth', 150, 1.0, 0.5, 'slideDown')
+        };
+
+        function playSynth(type, freq, duration, vol, fx) {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, now);
+            
+            if (fx === 'slideDown') {
+                osc.frequency.exponentialRampToValueAtTime(freq / 2, now + duration);
+            } else if (fx === 'slideUp') {
+                osc.frequency.exponentialRampToValueAtTime(freq * 1.5, now + duration);
+            }
+
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(vol, now + duration * 0.2);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now);
+            osc.stop(now + duration);
+        }
+
+        // --- 5. HELPER FUNCTIONS ---
+        function getFractionHTML(num, den, color = "white", size="text-5xl") {
+            return `
+                <div class="fraction text-${color} font-bold drop-shadow-[0_3px_3px_rgba(0,0,0,0.8)]">
+                    <span class="${size}">${num}</span>
+                    <div class="fraction-line"></div>
+                    <span class="${size}">${den}</span>
+                </div>
+            `;
+        }
+
+        function createParticles(x, y, color, amount = 20) {
+            for (let i = 0; i < amount; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    life: 1.0,
+                    decay: Math.random() * 0.05 + 0.02,
+                    color: color,
+                    size: Math.random() * 8 + 4
+                });
+            }
+        }
+
+        // --- 6. GAME LOGIC ---
+        
+        function spawnLevel() {
+            const qData = questionsData[currentQuestionIndex];
+            
+            // UI Update
+            document.getElementById('q-counter').innerText = `${currentQuestionIndex + 1}/${questionsData.length}`;
+            document.getElementById('question-content').innerHTML = `
+                ${getFractionHTML(qData.q[0][0], qData.q[0][1])}
+                <span class="text-yellow-400 mx-2">+</span>
+                ${getFractionHTML(qData.q[1][0], qData.q[1][1])}
+                <span class="text-yellow-400 mx-2">= ?</span>
+            `;
+
+            // Reset Timer
+            timer = 30;
+            updateHUD();
+
+            balls = [];
+            buckets = [];
+            grabbedBall = null;
+
+            // Spawn Buckets (Targets) at bottom center area
+            const bucketColors = ['#f43f5e', '#3b82f6', '#10b981']; // Rose, Blue, Emerald
+            const bucketY = canvas.height - 150;
+            const spacing = Math.min(300, canvas.width / 3);
+            const startX = canvas.width / 2 - spacing;
+
+            for (let i = 0; i < 3; i++) {
+                buckets.push({
+                    id: i,
+                    x: startX + (i * spacing),
+                    y: bucketY,
+                    radius: 80,
+                    color: bucketColors[i],
+                    fraction: qData.options[i],
+                    isCorrect: i === qData.correctIdx,
+                    scale: 1, // for breathing animation
+                    targetScale: 1
+                });
+            }
+
+            // Spawn Answer Balls scattered around middle/top area
+            for (let i = 0; i < 3; i++) {
+                // Ensure balls don't spawn off-screen or inside UI
+                const minX = 100;
+                const maxX = canvas.width - 100;
+                // Leave top area for question board
+                const minY = 200; 
+                const maxY = canvas.height / 2;
+
+                balls.push({
+                    id: i,
+                    x: minX + Math.random() * (maxX - minX),
+                    y: minY + Math.random() * (maxY - minY),
+                    radius: 50,
+                    baseRadius: 50,
+                    color: '#fcd34d', // Amber/Yellow
+                    borderColor: '#fbbf24',
+                    fraction: qData.options[i],
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    isGrabbed: false,
+                    isThrown: false,
+                    originalBucketId: i // To link ball to answer logic
+                });
+            }
+        }
+
+        function updateHUD() {
+            const timerEl = document.getElementById('timer-display');
+            timerEl.innerText = `${timer}s`;
+            if (timer <= 5) timerEl.classList.add('text-red-500', 'animate-pulse');
+            else timerEl.classList.remove('text-red-500', 'animate-pulse');
+
+            document.getElementById('score-display').innerText = score;
+
+            for (let i = 1; i <= 3; i++) {
+                const heart = document.getElementById(`life-${i}`);
+                if (i <= lives) {
+                    heart.style.opacity = '1';
+                    heart.style.filter = 'grayscale(0%)';
+                } else {
+                    heart.style.opacity = '0.3';
+                    heart.style.filter = 'grayscale(100%)';
+                }
+            }
+        }
+
+        function handleAnswer(bucket, ball) {
+            if (bucket.isCorrect && ball.originalBucketId === bucket.id) {
+                // Correct!
+                sounds.correct();
+                score += 20 + timer; // Bonus points for time
+                createParticles(bucket.x, bucket.y, '#10b981', 50); // Green splash
+                bucket.targetScale = 1.3;
+                
+                setTimeout(() => {
+                    currentQuestionIndex++;
+                    if (currentQuestionIndex >= questionsData.length) endGame(true);
+                    else spawnLevel();
+                }, 1000);
+
+            } else {
+                // Wrong!
+                sounds.wrong();
+                lives--;
+                updateHUD();
+                createParticles(bucket.x, bucket.y, '#ef4444', 30); // Red splash
+                bucket.targetScale = 0.8;
+                
+                // Reset ball position
+                ball.isThrown = false;
+                ball.vx = 0; ball.vy = 0;
+                ball.x = canvas.width / 2;
+                ball.y = canvas.height / 3;
+
+                setTimeout(() => {
+                    bucket.targetScale = 1;
+                    if (lives <= 0) endGame(false);
+                }, 500);
+            }
+            
+            // Remove ball from play during animation
+            const index = balls.indexOf(ball);
+            if(index > -1) balls.splice(index, 1);
+        }
+
+        function endGame(isWin) {
+            gameState = 'END';
+            clearInterval(timerInterval);
+            document.getElementById('game-ui').classList.add('hidden');
+            document.getElementById('end-screen').classList.remove('hidden');
+            
+            document.getElementById('final-score').innerText = score;
+            const titleEl = document.getElementById('end-title');
+            const msgEl = document.getElementById('end-message');
+
+            if (isWin) {
+                titleEl.innerText = "HEBAT!";
+                titleEl.className = "text-7xl md:text-9xl font-black text-glow-yellow mb-4 text-green-400";
+                msgEl.innerText = "Anda telah menakluki Arena Ilmu ini!";
+                sounds.correct();
+            } else {
+                titleEl.innerText = "CUBA LAGI";
+                titleEl.className = "text-7xl md:text-9xl font-black text-glow-pink mb-4 text-red-400";
+                msgEl.innerText = "Jangan putus asa, teruskan berlatih tambah pecahan!";
+                sounds.gameover();
+            }
+        }
+
+        // --- 7. PHYSICS & RENDER LOOP ---
+        
+        function gameLoop(timestamp) {
+            const dt = timestamp - lastTime;
+            lastTime = timestamp;
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (gameState === 'PLAYING') {
+                updatePhysics(dt);
+                drawBuckets();
+                drawBalls();
+                drawParticles();
+                drawHandCursor();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updatePhysics(dt) {
+            // Update cursor velocity based on delta movement
+            handCursor.vx = handCursor.x - handCursor.lastX;
+            handCursor.vy = handCursor.y - handCursor.lastY;
+            handCursor.lastX = handCursor.x;
+            handCursor.lastY = handCursor.y;
+
+            // Hand Interactions
+            if (handCursor.active) {
+                if (handCursor.isPinching && !grabbedBall) {
+                    // Try to grab a ball
+                    for (let ball of balls) {
+                        if (ball.isThrown) continue;
+                        const dist = Math.hypot(handCursor.x - ball.x, handCursor.y - ball.y);
+                        // Make grab radius slightly larger than visual radius for easier playing
+                        if (dist < ball.radius * 1.5) { 
+                            grabbedBall = ball;
+                            ball.isGrabbed = true;
+                            sounds.grab();
+                            break;
+                        }
+                    }
+                } else if (!handCursor.isPinching && grabbedBall) {
+                    // Release the ball (Throw)
+                    grabbedBall.isGrabbed = false;
+                    grabbedBall.isThrown = true;
+                    // Apply hand velocity to throw, amplify slightly
+                    grabbedBall.vx = handCursor.vx * 0.8;
+                    grabbedBall.vy = handCursor.vy * 0.8;
+                    
+                    // Add some gravity to throw if moving downwards, or general gravity
+                    sounds.throw();
+                    grabbedBall = null;
+                }
+            } else if (grabbedBall) {
+                // If hand tracking lost while grabbing, drop it safely
+                grabbedBall.isGrabbed = false;
+                grabbedBall = null;
+            }
+
+            // Update Balls
+            for (let i = balls.length - 1; i >= 0; i--) {
+                let ball = balls[i];
+
+                if (ball.isGrabbed) {
+                    // Ball follows hand smoothly
+                    ball.x += (handCursor.x - ball.x) * 0.5;
+                    ball.y += (handCursor.y - ball.y) * 0.5;
+                    ball.vx = 0; ball.vy = 0;
+                    ball.radius = ball.baseRadius * 1.2; // Enlarge slightly when held
+                } else {
+                    ball.radius = ball.baseRadius;
+                    
+                    if (ball.isThrown) {
+                        // Apply gravity and movement
+                        ball.vy += 0.8; // Gravity
+                        ball.x += ball.vx;
+                        ball.y += ball.vy;
+
+                        // Check collision with buckets
+                        for (let bucket of buckets) {
+                            const dist = Math.hypot(ball.x - bucket.x, ball.y - bucket.y);
+                            if (dist < bucket.radius) {
+                                // Scored/Missed
+                                handleAnswer(bucket, ball);
+                                break; // Ball handled, exit bucket loop
+                            }
+                        }
+                    } else {
+                        // Floating idle movement
+                        ball.x += ball.vx;
+                        ball.y += ball.vy;
+                        
+                        // Bounce off walls (keep within playable area)
+                        const padding = ball.radius + 10;
+                        if (ball.x < padding || ball.x > canvas.width - padding) ball.vx *= -1;
+                        // Don't bounce into question board area or buckets area while idle
+                        if (ball.y < 250) { ball.y = 250; ball.vy *= -1; }
+                        if (ball.y > canvas.height - 300) { ball.y = canvas.height - 300; ball.vy *= -1; }
+                    }
+                }
+            }
+
+            // Update Buckets animation
+            for (let bucket of buckets) {
+                bucket.scale += (bucket.targetScale - bucket.scale) * 0.1;
+                // Idle breathing
+                if (bucket.targetScale === 1) {
+                    bucket.scale = 1 + Math.sin(Date.now() / 300) * 0.05;
+                }
+            }
+
+            // Update Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.5; // gravity
+                p.life -= p.decay;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        // Draw fraction helper for Canvas
+        function drawFractionOnCanvas(ctx, num, den, x, y, size = 30) {
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${size}px 'Baloo 2', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Text shadow
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 4;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+
+            const offset = size * 0.6;
+            ctx.fillText(num, x, y - offset);
+            ctx.fillText(den, x, y + offset + 5); // +5 tweak for font baseline
+
+            // Draw line
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = 'white';
+            ctx.beginPath();
+            const width = ctx.measureText(den > num ? den : num).width + 10;
+            ctx.moveTo(x - width/2, y);
+            ctx.lineTo(x + width/2, y);
+            ctx.stroke();
+        }
+
+        function drawBuckets() {
+            for (let bucket of buckets) {
+                ctx.save();
+                ctx.translate(bucket.x, bucket.y);
+                ctx.scale(bucket.scale, bucket.scale);
+
+                // Glow
+                ctx.shadowColor = bucket.color;
+                ctx.shadowBlur = 20;
+
+                // Bucket body (Trapezoid shape)
+                ctx.fillStyle = bucket.color;
+                ctx.beginPath();
+                ctx.moveTo(-bucket.radius, -bucket.radius/2);
+                ctx.lineTo(bucket.radius, -bucket.radius/2);
+                ctx.lineTo(bucket.radius * 0.7, bucket.radius);
+                ctx.lineTo(-bucket.radius * 0.7, bucket.radius);
+                ctx.closePath();
+                ctx.fill();
+
+                // Bucket opening (Ellipse)
+                ctx.fillStyle = 'rgba(0,0,0,0.4)'; // Dark inside
+                ctx.beginPath();
+                ctx.ellipse(0, -bucket.radius/2, bucket.radius, bucket.radius * 0.3, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Bucket front lip
+                ctx.lineWidth = 8;
+                ctx.strokeStyle = bucket.color;
+                ctx.beginPath();
+                ctx.ellipse(0, -bucket.radius/2, bucket.radius, bucket.radius * 0.3, 0, 0, Math.PI);
+                ctx.stroke();
+
+                // Draw Answer inside bucket
+                ctx.shadowColor = 'transparent';
+                drawFractionOnCanvas(ctx, bucket.fraction[0], bucket.fraction[1], 0, 20, 28);
+
+                ctx.restore();
+            }
+        }
+
+        function drawBalls() {
+            for (let ball of balls) {
+                ctx.save();
+                ctx.translate(ball.x, ball.y);
+                
+                // Glow
+                ctx.shadowColor = ball.borderColor;
+                ctx.shadowBlur = ball.isGrabbed ? 30 : 15;
+
+                // Ball background (Gradient)
+                const gradient = ctx.createRadialGradient(-ball.radius/3, -ball.radius/3, 0, 0, 0, ball.radius);
+                gradient.addColorStop(0, '#fef3c7'); // Light yellow reflection
+                gradient.addColorStop(0.5, ball.color);
+                gradient.addColorStop(1, '#d97706'); // Dark orange edge
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Border
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = ball.borderColor;
+                ctx.stroke();
+
+                // Inner text
+                ctx.shadowColor = 'transparent';
+                drawFractionOnCanvas(ctx, ball.fraction[0], ball.fraction[1], 0, 0, ball.radius * 0.6);
+
+                ctx.restore();
+            }
+        }
+
+        function drawParticles() {
+            for (let p of particles) {
+                ctx.save();
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.translate(p.x, p.y);
+                ctx.beginPath();
+                ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function drawHandCursor() {
+            if (!handCursor.active) return;
+
+            ctx.save();
+            ctx.translate(handCursor.x, handCursor.y);
+
+            // Crosshair / Cursor visual
+            const color = handCursor.isPinching ? '#f472b6' : '#60a5fa'; // Pink when pinching, Blue when open
+            
+            // Outer glow ring
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 15;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            
+            ctx.beginPath();
+            const radius = handCursor.isPinching ? 15 : 25;
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Inner dot
+            ctx.fillStyle = 'white';
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(0, 0, handCursor.isPinching ? 8 : 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // If pinching, show strength indicator ring
+            if (handCursor.isPinching) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(0, 0, 15 + (handCursor.pinchStrength * 10), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+
+        // --- 8. MEDIAPIPE HANDS SETUP ---
+        const videoElement = document.getElementById('input_video');
+        
+        function calculateDistance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        function onResults(results) {
+            // 1. Update Mini Webcam Canvas
+            webcamCtx.save();
+            webcamCtx.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height);
+            
+            if (results.image) {
+                // Draw mirrored image
+                webcamCtx.translate(webcamCanvas.width, 0);
+                webcamCtx.scale(-1, 1);
+                webcamCtx.drawImage(results.image, 0, 0, webcamCanvas.width, webcamCanvas.height);
+                webcamCtx.restore(); // Restore so drawings aren't mirrored incorrectly relative to coordinates
+            }
+            
+            // Optionally draw landmarks on mini webcam for debug/feedback
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                 const landmarks = results.multiHandLandmarks[0];
+                 drawConnectors(webcamCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                 drawLandmarks(webcamCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
+            }
+
+
+            // 2. Process Game Controls
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handCursor.active = true;
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Map coordinates to main game canvas. 
+                // X is inverted because the user is facing the camera (mirror effect)
+                // We use the Index Finger MCP (Knuckle) or wrist as general cursor center
+                const centerNode = landmarks[9]; // Middle finger MCP
+                handCursor.x = (1 - centerNode.x) * canvas.width;
+                handCursor.y = centerNode.y * canvas.height;
+
+                // Pinch Detection (Thumb tip [4] to Index tip [8])
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const pinchDist = calculateDistance(thumbTip, indexTip);
+                
+                // Thresholds might need adjustment based on camera. 
+                // Distances are normalized [0,1]
+                const pinchThreshold = 0.05; 
+                
+                handCursor.isPinching = pinchDist < pinchThreshold;
+                // Calculate strength [0-1] where 1 is fully pinched
+                handCursor.pinchStrength = Math.max(0, 1 - (pinchDist / pinchThreshold));
+
+            } else {
+                handCursor.active = false;
+                handCursor.isPinching = false;
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.5
+        });
+        
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        // --- 9. START SEQUENCE ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            initAudio();
+            document.getElementById('start-btn').classList.add('hidden');
+            document.getElementById('loading-indicator').classList.remove('hidden');
+            
+            camera.start().then(() => {
+                // Hide Start Screen
+                document.getElementById('start-screen').classList.add('hidden');
+                
+                // Show Game UI & Webcam
+                document.getElementById('game-ui').classList.remove('hidden');
+                document.getElementById('webcam-container').classList.remove('hidden');
+                
+                // Initialize Game
+                gameState = 'PLAYING';
+                currentQuestionIndex = 0;
+                score = 0;
+                lives = 3;
+                
+                spawnLevel();
+                
+                // Start Timer
+                timerInterval = setInterval(() => {
+                    if (gameState === 'PLAYING') {
+                        timer--;
+                        updateHUD();
+                        if (timer <= 0) {
+                            // Time out logic - count as wrong
+                            sounds.wrong();
+                            lives--;
+                            updateHUD();
+                            if(lives <= 0) endGame(false);
+                            else {
+                                currentQuestionIndex++;
+                                if (currentQuestionIndex >= questionsData.length) endGame(true);
+                                else spawnLevel();
+                            }
+                        }
+                    }
+                }, 1000);
+
+                // Start Render Loop
+                lastTime = performance.now();
+                requestAnimationFrame(gameLoop);
+
+            }).catch(err => {
+                alert("Sila benarkan akses kamera web untuk bermain.");
+                console.error(err);
+                document.getElementById('start-btn').classList.remove('hidden');
+                document.getElementById('loading-indicator').classList.add('hidden');
+            });
+        });
+
+    </script>
+</body>
+</html>
